@@ -79,6 +79,20 @@ SHUTDOWN_COMMAND = ["sudo", "shutdown", "-h", "now"]
 # Wait between sync and shutdown.
 WAIT_SECONDS = 1.0
 
+# Maximum number of shutdown attempts.
+#
+# For example:
+#   1st attempt -> failed
+#   wait
+#   2nd attempt -> failed
+#   wait
+#   3rd attempt -> failed
+#   stop retrying
+SHUTDOWN_MAX_RETRIES = 3
+
+# Delay between failed shutdown attempts.
+SHUTDOWN_RETRY_DELAY_SECONDS = 1.0
+
 # ============================================================
 # Validation
 # ============================================================
