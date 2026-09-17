@@ -44,7 +44,7 @@ class PowerLossSignal(Enum):
 # 
 # You must choose the value according to your actual UPS.
 # signal circuit.
-POWER_LOSS_ACTIVE_LEVEL = "HIGH"
+POWER_LOSS_SIGNAL = PowerLossSignal.HIGH
 
 # ============================================================
 # Power-loss confirmation
