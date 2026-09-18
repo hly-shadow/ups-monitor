@@ -1,24 +1,6 @@
 """
 
-UPS GPIO monitor.
-
-State machine:
-    NORMAL  
-    │
-    │ Rising edge
-    ▼
-    CONFIRMING
-    │
-    │ Falling edge
-    ▼
-    检查 HIGH 持续时间
-    │
-    ├── 不满足 → NORMAL
-    │
-    └── 满足 → SHUTDOWN_REQUESTED
-                        │
-                        ▼
-                safe_shutdown()
+UPS GPIO monitor
 """
 
 import time
@@ -29,8 +11,9 @@ from typing import Optional
 from gpiozero import DigitalInputDevice
 
 from config import(
-    CONFIRM_DELAY_SECONDS,
-    POWER_LOSS_SIGNAL
+    SHUTDOWN_PIN,
+    STA_MIN_PULSE_SECONDS,
+    STA_MAX_PULSE_SECONDS
 )
 from logger import logger
 from system import safe_shutdown
@@ -63,10 +46,15 @@ class MonitorState(Enum):
 class UPSMonitor():
     """
     
-    Monitor UPS power status through a GPIO input.
+    Monitor UPS STA/Halt signal on GPIO SHUTDWON_PIN(BCM).
 
-    The monitor does not execute GPIO polling manually.
-    gpiozero callbacks are used for state changes.
+    Vendor behavior:
+        Normal:
+            GPIO SHUTDWON_PIN(BCM) -> LOW
+        Halt:
+            GPIO SHUTDWON_PIN(BCM) -> High for approximately 2~3 seconds
+        Then:
+            GPIO SHUTDWON_PIN(BCM) -> LOW
     """
     def __init__(self, pin: int):
 
@@ -83,17 +71,11 @@ class UPSMonitor():
         # execute in different threads.
         self.state_lock = threading.Lock()
 
-        # Timer used during the confirmation period.
-        self.confirm_timer: Optional[threading.Timer] = None
+        self.power_loss_start_time: Optional[float] = None
 
         # =====================================================
         # GPIO confirmation
         # =====================================================
-
-        logger.info(
-            "Initializing UPS monitor: GPIO=%d",
-            self.pin
-        )
 
         # GPIO input
         # Internal pull-down
@@ -108,12 +90,12 @@ class UPSMonitor():
         # GPIO callbacks
         # =====================================================
 
-        self.device.when_pressed = self._on_rising_edge
-        self.device.when_released = self._on_falling_edge
+        self.device.when_activated = self._on_rising_edge
+        self.device.when_deactivated = self._on_falling_edge
 
         logger.info(
             "UPS monitor initialized:",
-            "GPIO%d, pull_down enabled.",
+            "GPIO%d, internal pull-down enabled.",
             self.pin
         )
 
@@ -132,11 +114,12 @@ class UPSMonitor():
         
         Check GPIO state when the monitor starts.
 
-        This is important because the Raspberry Pi may boot while
-        UPS power is already lost.
+        Important:
+            STA is normal LOW.
 
-        In that case,there may be no new GPIO edge after startup,so
-        we must explicitly check the current state.
+        If GPIO is HIGH at startup, we do NOT immediately
+        shutdown because we don't know whether this is a 
+        complete STA pulse or simply a startup condition.
         """
 
         try:
@@ -148,15 +131,18 @@ class UPSMonitor():
 
             else:
                 logger.info(
-                    "GPIO%d is LOW at startup;",
-                    "UPS power is considered normal",
+                    "GPIO%d is LOW at startup; STA inactive.",
                     self.pin
                 )
         except Exception:
             logger.exception("Failed to determine GPIO state at startup.")
 
     def _on_rising_edge(self) -> None:       
-        """Handle LOW -> HIGH transition"""
+        """
+        LOW -> HIGH
+
+        Start measuring STA pulse duration.
+        """
 
         with self.state_lock:
 
@@ -196,12 +182,16 @@ class UPSMonitor():
             self.power_loss_start_time = time.monotonic()
 
             logger.warning(
-                "Power-loss signal started,"
+                "STA/Halt pulse started,"
                 "waiting for falling edge."
             )
 
     def _on_falling_edge(self) -> None:
-        """Handle HIGH -> LOW transition"""
+        """
+        HIGH -> LOW
+        
+        Calculate STA pulse duration.
+        """
 
         with self.state_lock:
 
@@ -222,35 +212,49 @@ class UPSMonitor():
             if self.power_loss_start_time is None:
                 logger.warning(
                     "Falling edge detected without "
-                    "a vaild rising-edge timestamp."
+                    "a valid rising-edge timestamp."
                 )
 
                 self.state = MonitorState.NORMAL
                 return
 
-            duration = (time.monotonic - self.power_loss_start_time)
+            duration = (time.monotonic() - self.power_loss_start_time)
             self.power_loss_start_time = None
 
             logger.info(
-                "Power-loss signal duration: %.3f seconds.",
+                "STA/Halt signal duration: %.3f seconds.",
                 duration
             )
 
-            if duration < CONFIRM_DELAY_SECONDS:
+            # Too short
+            if duration < STA_MIN_PULSE_SECONDS:
+
                 self.state = MonitorState.NORMAL
 
-                logger.info(
-                    "Power-loss signal too short,"
-                    "shutdown cancelled."
+                logger.warning(
+                    "STA pulse too short: %.3f < %.3f seconds",
+                    duration,
+                    STA_MIN_PULSE_SECONDS
                 )
                 return
-            
+
+            # Too long
+            if duration > STA_MAX_PULSE_SECONDS:
+
+                self.state = MonitorState.NORMAL
+
+                logger.warning(
+                    "STA pulse too long: %.3f > %.3f seconds",
+                    duration,
+                    STA_MAX_PULSE_SECONDS
+                )
+                return
+
             # Confirmed
             self.state = MonitorState.SHUTDOWN_REQUESTED
 
-            logger.critical(
-                "UPS power loss confirmed:",
-                "signal duration %.3f seconds.",
+            logger.info(
+                "Valid STA/Halt signal confirmed: %.3f seconds.",
                 duration
             )
             logger.critical("Shutdown requested.")
@@ -264,74 +268,20 @@ class UPSMonitor():
         # safe_shutdown() can take several seconds.
         # -------------------------------------------------
         self._execute_shutdown()
-
-    # Power restored
-    def _on_power_restored(self) -> None:
-        """
-        
-        Handle UPS power restoration.
-
-        If restoration occurs during the confirmation period,
-        cancel the pending shutdown.
-
-        If shutdown has already been requested, restoration
-        does NOT cancel it. 
-        """
-
-        with  self.state_lock:
-            # Shutdown already requested
-            if self.state == MonitorState.SHUTDOWN_REQUESTED:
-                logger.warning(
-                    "UPS power restored, but shutdown has"
-                    "already  been requested."
-                )
-                return
-
-            # Shutdown failed
-            if self.state == MonitorState.SHUTDOWN_FAILED:
-                logger.warning("UPS power restored after failed shutdown.")
-
-                self.state = MonitorState.NORMAL
-                logger.info("UPS monitor returned to NORMAL state.")
-
-                return
-            
-            # Unexpected restoration
-            if self.state != MonitorState.CONFIRMING:
-                logger.info(
-                    "UPS power restored "
-                    "(no shutdown confirmation pending)"
-                )
-
-                self.state = MonitorState.NORMAL
-
-                return
-
-            # Cancel confirmation
-            if self.confirm_timer is not None:
-                self.confirm_timer.cancel()
-                self.confirm_timer = None
-
-            self.state = MonitorState.NORMAL
-            
-            logger.info(
-                "UPS power restored within confirmation period,"
-                "shutdown cancelled."
-            )
-
+    
     def _execute_shutdown(self) -> None:
         """Execute the safe shutdown sequence."""
 
-        logger.critical("Executing safe shutdown.")
+        logger.info("Executing safe shutdown requested by UPS STA.")
 
         try:
             res = safe_shutdown()
         except Exception:
-            logger.exception("Unexcepted exception during safe shutdown.")
+            logger.exception("Unexpected exception during safe shutdown.")
             res = False
 
         if res:
-            logger.critical("Safe shutdown completed successfully.")
+            logger.info("Safe shutdown completed successfully.")
 
             # Keep SHUTDOWN_REQUESTED
             #
@@ -346,8 +296,10 @@ class UPSMonitor():
         # to trigger another transition.
         with self.state_lock:
             self.state = MonitorState.SHUTDOWN_FAILED
-
-        logger.critical("Safe shutdown failed after all retry attempts.")
+            logger.critical(
+                "Safe shutdown failed after all retry attempts.",
+                "Monitor entering terminal state."
+            )
 
     def close(self) -> None:
         """Close the UPS monitor and release GPIO resources."""

@@ -34,7 +34,7 @@ STA_PULL_UP = False
 
 # High pulse singnal duration: 2-3 seconds.
 STA_MIN_PULSE_SECONDS = 2.0
-SAT_MAX_PULSE_SECONDS = 3.0
+STA_MAX_PULSE_SECONDS = 3.0
 
 # ============================================================
 # Logging
