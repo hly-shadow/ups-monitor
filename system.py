@@ -18,13 +18,15 @@ It does not:
 """
 
 import time
+import shlex
 import subprocess
 from collections.abc import Sequence
 
-from config import (
-    SHUTDOWN_COMMAND, 
+from config import ( 
     SYNC_COMMAND, 
     WAIT_SECONDS,
+    SHUTDOWN_COMMAND,
+    COMMAND_TIMEOUT_SECONDS,
     SHUTDOWN_MAX_RETRIES,
     SHUTDOWN_RETRY_DELAY_SECONDS
 )
@@ -33,12 +35,6 @@ from logger import logger
 # ============================================================
 # Constants
 # ============================================================
-
-# Maximum time allowed for a system command.
-#
-# This prevents the UPS monitor from being blocked forever
-# if a command hangs.
-COMMAND_TIMEOUT_SECONDS = 5.0
 
 # ============================================================
 # Command execution
@@ -61,7 +57,8 @@ def run_command(
         False if execution fails.
     """
 
-    command_text = " ".join(command)
+    # Using shelx properly handles arguments containing spaces.
+    command_text = shlex.join(command)
 
     logger.info("Executing command: %s", command_text)
 
@@ -74,6 +71,46 @@ def run_command(
             stderr=subprocess.PIPE,
             text=True
         )
+
+        # Command execution failed
+        if result.returncode != 0:
+            logger.error(
+                "Command failed: %s, return code=%d",
+                command_text,
+                result.returncode
+            )
+            if result.stdout:
+                logger.error(
+                    "stdout: %s",
+                    result.stdout.strip()
+                )
+            if result.stderr:
+                logger.error(
+                    "stderr: %s",
+                    result.stderr.strip()
+                )
+
+            return False
+
+        # Command execution successful
+        else:
+            if result.stdout:
+                logger.debug(
+                    "stdout: %s",
+                    result.stdout.strip()
+                )
+            if result.stderr:
+                logger.debug(
+                    "stderr: %s",
+                    result.stderr.strip()
+                )
+        
+            logger.info(
+                "Command completed successfully: %s",
+                command_text
+            )
+        
+            return True
     except subprocess.TimeoutExpired:
         logger.error(
             "Command timed out after %.1f seconds: %s",
@@ -92,7 +129,7 @@ def run_command(
         return False
     except OSError:
         logger.exception(
-            "OS error while executiong: %s",
+            "OS error while executing: %s",
             command_text
         )
         return False
@@ -102,47 +139,6 @@ def run_command(
             command_text
         )
         return False
-
-    if result.returncode != 0:
-        logger.error(
-            "Command failed: %s, return code=%d",
-            command_text,
-            result.returncode
-        )
-        if result.stdout:
-            logger.error(
-                "stdout: %s",
-                result.stdout.strip()
-            )
-        if result.stderr:
-            logger.error(
-                "stderr: %s",
-                result.stderr.strip()
-            )
-
-        return False
-
-    # ============================================================
-    # Successful command
-    # ============================================================
-
-    if result.stdout:
-        logger.debug(
-            "stdout: %s",
-            result.stdout.strip()
-        )
-    if result.stderr:
-        logger.debug(
-            "stderr: %s",
-            result.stderr.strip()
-        )
-
-    logger.info(
-        "Command completed successfully: %s",
-        command_text
-    )
-
-    return True
 
 # ============================================================
 # Filesystem synchronization
@@ -215,7 +211,7 @@ def shutdown_system() -> bool:
         # No need to wait after the final attempt.
         if attempt < SHUTDOWN_MAX_RETRIES:
             logger.warning(
-                "Retrying shutdown in %.1f seconds",
+                "Retrying shutdown in %.1f seconds...",
                 SHUTDOWN_RETRY_DELAY_SECONDS
             )
 
@@ -254,10 +250,8 @@ def safe_shutdown() -> bool:
     # Step 1: Sync filesystem
     if not sync_filesystem():
         logger.critical(
-            "Safe shutdown aborted because filesystem"
-            "synchronization failed"
+            "Filesystem sync failed; shutdown will still be attempted."
         )
-        return False
 
     # Step 2: Wait before shutdown
     if WAIT_SECONDS > 0:
@@ -275,6 +269,6 @@ def safe_shutdown() -> bool:
 
         return False
 
-    logger.critical("Shutdown command successfully issued.")
+    logger.info("Shutdown command successfully issued.")
 
     return True

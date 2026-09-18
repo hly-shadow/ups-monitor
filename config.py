@@ -68,7 +68,11 @@ SHUTDOWN_MAX_RETRIES = 3
 # Delay between failed shutdown attempts.
 SHUTDOWN_RETRY_DELAY_SECONDS = 1.0
 
-SHUTDOWN_COMMAND_TIMEOUT = 10.0
+# Maximum time allowed for a system command.
+#
+# This prevents the UPS monitor from being blocked forever
+# if a command hangs.
+COMMAND_TIMEOUT_SECONDS = 5.0
 
 # ============================================================
 # UART
