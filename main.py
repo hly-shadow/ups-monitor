@@ -2,7 +2,7 @@
 Application entry point for the UPS monitor.
 """
 
-from gpiozero import pause
+from signal import pause
 
 from logger import logger
 from monitor import UPSMonitor
@@ -18,7 +18,7 @@ def main() -> None:
         # Keep the process alive while gpiozero handles callbacks.
         pause()
     except KeyboardInterrupt:
-        logger.info("UPS monitor interrupted bu user.")
+        logger.info("UPS monitor interrupted by user.")
 
     except Exception:
         logger.exception("Unexcepted error in UPS monitor.")
@@ -28,8 +28,6 @@ def main() -> None:
             monitor.close()
 
             logger.info("UPS monitor stopped.")
-
-        logger.info("Create the class of UPSMonitor failed.")
 
 if  __name__ == "__main__":
     main()

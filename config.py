@@ -6,7 +6,6 @@ Do not put monitor logic here.
 
 """
 
-from enum import Enum
 from pathlib import Path
 
 # ============================================================
@@ -17,49 +16,25 @@ APP_NAME = "ups-monitor"
 APP_VERSION = "1.0.0"
 
 # ============================================================
-# GPIO configuration
+# GPIO / STA
 # ============================================================
 
 # BCM GPIO number.
 # GPIO 17 = physical pin 11 on Raspberry Pi 4B.
 SHUTDOWN_PIN = 17
 
-class PowerLossSignal(Enum):
-    """GPIO level that represents UPS power loss."""
-
-    HIGH = (True, False)
-    LOW = (False, True)
-
-    def __init__(self, active_state: bool, pull_up: bool):
-        self.active_state = active_state
-        self.pull_up = pull_up
-
-# Which GPIO level means "UPS power lost".
-#
-# "HIGH":
-#       GPIO becomes HIGH when UPS power is lost.
-#
-# "LOW":
-#       GPIO  becomes LOW when UPS power is lost.
-# 
-# You must choose the value according to your actual UPS.
-# signal circuit.
-POWER_LOSS_SIGNAL = PowerLossSignal.HIGH
-
 # ============================================================
-# Power-loss confirmation
+# Signal detection confirmation
 # ============================================================
 
-# Power must remain lost for this amount of time before
-# shutdown is triggered.
-#
-# Example:
-#   2.0 seconds:
-#       power lost --> wait 2 seconds -->shutdown
-#
-# If power returns before 2 seconds:
-#       cancel shutdown
-CONFIRM_DELAY_SECONDS = 2.0
+# Vendor STA behavior
+# normal = LOW 
+# halt = HIGH
+STA_PULL_UP = False
+
+# High pulse singnal duration: 2-3 seconds.
+STA_MIN_PULSE_SECONDS = 2.0
+SAT_MAX_PULSE_SECONDS = 3.0
 
 # ============================================================
 # Logging
@@ -93,12 +68,18 @@ SHUTDOWN_MAX_RETRIES = 3
 # Delay between failed shutdown attempts.
 SHUTDOWN_RETRY_DELAY_SECONDS = 1.0
 
+SHUTDOWN_COMMAND_TIMEOUT = 10.0
+
 # ============================================================
-# Validation
+# UART
 # ============================================================
 
-if CONFIRM_DELAY_SECONDS <= 0:
-    raise ValueError("CONFIRM_DELAY_SECONDS must be greater than 0")
+UART_DEVICE = "/dev/serial0"
+UART_BAUDRATE = 9600
 
-if WAIT_SECONDS < 0:
-    raise ValueError("WAIT_SECONDS must not be negative")
+# UART is 8N1
+UART_BYTESIZE = 8
+UART_PARITY = "N"
+UART_STOPBITS = 1
+
+UART_TIMEOUT = 1.0

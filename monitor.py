@@ -3,46 +3,34 @@
 UPS GPIO monitor.
 
 State machine:
-    Normal
-      |
-      | power loss detected
-      |
-      ⋁
-    Confirming
-      |
-      | power restored before timeout
-      +---------------------> Normal
-      |
-      | power loss confirmed
-      ⋁
-    Shutdown Requested
-      |
-      | safe_shutdown()
-      |
-      +---------------------> Shutdown command issued
-
-If all shutdown attempts fail:
-    Shutdown Requested
-      |
-      | shutdown failed
-      ⋁
-    Shutdown_Failed
-      |
-      | power restored
-      ⋁
-    Normal
+    NORMAL  
+    │
+    │ Rising edge
+    ▼
+    CONFIRMING
+    │
+    │ Falling edge
+    ▼
+    检查 HIGH 持续时间
+    │
+    ├── 不满足 → NORMAL
+    │
+    └── 满足 → SHUTDOWN_REQUESTED
+                        │
+                        ▼
+                safe_shutdown()
 """
 
+import time
 import threading
 from enum import Enum, auto
 from typing import Optional
 
-from gpiozero import Button
+from gpiozero import DigitalInputDevice
 
 from config import(
     CONFIRM_DELAY_SECONDS,
-    POWER_LOSS_SIGNAL,
-    SHUTDOWN_PIN
+    POWER_LOSS_SIGNAL
 )
 from logger import logger
 from system import safe_shutdown
@@ -80,7 +68,7 @@ class UPSMonitor():
     The monitor does not execute GPIO polling manually.
     gpiozero callbacks are used for state changes.
     """
-    def __init__(self, pin: int = SHUTDOWN_PIN):
+    def __init__(self, pin: int):
 
         self.pin = pin
 
@@ -101,32 +89,33 @@ class UPSMonitor():
         # =====================================================
         # GPIO confirmation
         # =====================================================
-        self.active_level = POWER_LOSS_SIGNAL.active_state
-        self.pull_up = POWER_LOSS_SIGNAL.pull_up
 
         logger.info(
-            "Initializing UPS monitor:"
-            " GPIO=%d, signal=%s, active_state=%s, pull_up=%s",
-            self.pin,
-            POWER_LOSS_SIGNAL.name,
-            self.active_level,
-            self.pull_up
+            "Initializing UPS monitor: GPIO=%d",
+            self.pin
         )
 
-        self.device = Button(
+        # GPIO input
+        # Internal pull-down
+        # LOW = NORMAL
+        # HIGH = power-loss signal
+        self.device = DigitalInputDevice(
             pin=self.pin,
-            active_state=self.active_level,
-            pull_up=self.pull_up
+            pull_up=False
         )
 
         # =====================================================
         # GPIO callbacks
         # =====================================================
 
-        self.device.when_pressed = ()
-        self.device.when_released = ()
+        self.device.when_pressed = self._on_rising_edge
+        self.device.when_released = self._on_falling_edge
 
-        logger.info("UPS monitor initialized.")
+        logger.info(
+            "UPS monitor initialized:",
+            "GPIO%d, pull_down enabled.",
+            self.pin
+        )
 
         # =====================================================
         # Check startup state
@@ -151,34 +140,36 @@ class UPSMonitor():
         """
 
         try:
-            if self.device.is_pressed:
-                logger.warning("UPS power loss detected at startup.")
-
-                self._on_power_loss_detected()
+            if self.device.is_active:
+                logger.warning(
+                    "GPIO%d is HIGH at startup.",
+                    self.pin
+                )
 
             else:
-                logger.info("UPS power is normal at startup.")
+                logger.info(
+                    "GPIO%d is LOW at startup;",
+                    "UPS power is considered normal",
+                    self.pin
+                )
         except Exception:
-            logger.exception("Failed to determine UPS state at startup.")
+            logger.exception("Failed to determine GPIO state at startup.")
 
-    # Power loss
-    def _on_power_loss_detected(self) -> None:       
-        """
-        
-        Handle UPS power loss.
-
-        Start a confirmation timer.
-
-        If power is restored before the timer expires,
-        the timer will be cancelled.
-        """
+    def _on_rising_edge(self) -> None:       
+        """Handle LOW -> HIGH transition"""
 
         with self.state_lock:
+
+            logger.warning(
+                "GPIO%d rising edge detected:",
+                "LOW -> HIGH",
+                self.pin
+            )
 
             # Already shutting down.
             if self.state == MonitorState.SHUTDOWN_REQUESTED:
                 logger.warning(
-                    "Power loss event ignored:"
+                    "Rising edge ignored:"
                     "shutdown already requested."
                 )
                 return
@@ -186,7 +177,7 @@ class UPSMonitor():
             # Shutdown already failed.
             if self.state == MonitorState.SHUTDOWN_FAILED:
                 logger.warning(
-                    "Power loss event ignored:"
+                    "Rising edge ignored:"
                     "previous shutdown attempt failed."
                 )
                 return
@@ -194,7 +185,7 @@ class UPSMonitor():
             # Already confirming
             if self.state == MonitorState.CONFIRMING:
                 logger.debug(
-                    "Power loss event ignored:"
+                    "Rising edge ignored:"
                     "confirmation already in progress."
                 )
                 return
@@ -202,49 +193,65 @@ class UPSMonitor():
             # Normal --> Confirming
             self.state = MonitorState.CONFIRMING
 
+            self.power_loss_start_time = time.monotonic()
+
             logger.warning(
-                "UPS power loss detected,"
-                "starting %.1f seconds confirmation period",
-                CONFIRM_DELAY_SECONDS
+                "Power-loss signal started,"
+                "waiting for falling edge."
             )
 
-            self.confirm_timer = threading.Timer(CONFIRM_DELAY_SECONDS, self._confirm_power_loss)
-
-            # Do not prevent Python from exiting if the main
-            # thread is terminated.
-            self.confirm_timer.daemon = True
-
-            self.confirm_timer.start()
-
-    # Power loss confirmation
-    def _confirm_power_loss(self) -> None:
-        """
-        
-        Confirm that UPS power is still lost.
-
-        This method is executed by threading.Timer.
-        """
+    def _on_falling_edge(self) -> None:
+        """Handle HIGH -> LOW transition"""
 
         with self.state_lock:
-            # Timer may have been cancelled.
+
+            logger.info(
+                "GPIO%d falling edge detected:",
+                "HIGH -> LOW",
+                self.pin
+            )
+
             if self.state != MonitorState.CONFIRMING:
                 logger.info(
-                    "Power loss confirmation ignored:"
-                    "state is %s",
+                    "Falling edge ignored:"
+                    "current state is %s",
                     self.state.name
                 )
-
-                self.confirm_timer = None
                 return
 
+            if self.power_loss_start_time is None:
+                logger.warning(
+                    "Falling edge detected without "
+                    "a vaild rising-edge timestamp."
+                )
+
+                self.state = MonitorState.NORMAL
+                return
+
+            duration = (time.monotonic - self.power_loss_start_time)
+            self.power_loss_start_time = None
+
+            logger.info(
+                "Power-loss signal duration: %.3f seconds.",
+                duration
+            )
+
+            if duration < CONFIRM_DELAY_SECONDS:
+                self.state = MonitorState.NORMAL
+
+                logger.info(
+                    "Power-loss signal too short,"
+                    "shutdown cancelled."
+                )
+                return
+            
             # Confirmed
             self.state = MonitorState.SHUTDOWN_REQUESTED
 
-            self.confirm_timer = None
-
             logger.critical(
-                "UPS power loss confirmed after %.1f seconds.",
-                CONFIRM_DELAY_SECONDS
+                "UPS power loss confirmed:",
+                "signal duration %.3f seconds.",
+                duration
             )
             logger.critical("Shutdown requested.")
 
@@ -347,10 +354,6 @@ class UPSMonitor():
 
         logger.info("Close the UPS monitor.")
 
-        with self.state_lock:
-            if self.confirm_timer is not None:
-                self.confirm_timer.cancel()
-                self.confirm_timer = None
         try:
             self.device.close()
         except Exception:
