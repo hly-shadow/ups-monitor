@@ -94,7 +94,7 @@ class UPSMonitor():
         self.device.when_deactivated = self._on_falling_edge
 
         logger.info(
-            "UPS monitor initialized:",
+            "UPS monitor initialized:"
             "GPIO%d, internal pull-down enabled.",
             self.pin
         )
