@@ -30,7 +30,8 @@ LOG_BACKUP_COUNT = 3 # Keep 3 old log files
 
 LOG_FORMAT = (
     "%(asctime)s"
-    "[%(levelname)s]"
+    ".%(msecs)03d "
+    "[%(levelname)s] "
     "%(message)s"
 )
 
