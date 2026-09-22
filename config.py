@@ -27,14 +27,19 @@ SHUTDOWN_PIN = 17
 # Signal detection confirmation
 # ============================================================
 
-# Vendor STA behavior
-# normal = LOW 
-# halt = HIGH
+# Vendor STA protocol:
+# LOW = normal 
+# HIGH = System Halt request 
 STA_PULL_UP = False
+STA_ACTIVE_STATE = True
 
-# High pulse singnal duration: 2-3 seconds.
-STA_MIN_PULSE_SECONDS = 2.0
-STA_MAX_PULSE_SECONDS = 3.0
+# Require STA HIGH to remain stable for this long
+# before triggering shutdown
+STA_CONFIRM_SECONDS = 0.1
+
+# High pulse singnal duration: 2.0-3.0 seconds.
+# STA_MIN_PULSE_SECONDS = 2.0
+# STA_MAX_PULSE_SECONDS = 3.0
 
 # ============================================================
 # Logging
@@ -91,4 +96,4 @@ UART_TIMEOUT = 1.0
 UART_BUFFER_MAX_SIZE = 4096
 UART_FRAME_MAX_SIZE = 256
 
-VOLTAGE_CHANGE_THRESHOLD_MV = 50
+VOLTAGE_CHANGE_THRESHOLD_MV = 10

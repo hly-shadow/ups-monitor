@@ -1,15 +1,21 @@
-from ups_uart import UPSUART
+from gpiozero import DigitalInputDevice
+from time import sleep
 
-uart = UPSUART()
+sta = DigitalInputDevice(
+    pin=17,
+    pull_up=False,
+)
 
-status = uart.read_status()
+try:
+    while True:
+        print(
+            f"GPIO17 value={sta.value}, "
+            f"active={sta.is_active}"
+        )
+        sleep(5)
 
-if status is not None:
-    vin = status.input_power
-    batcap = status.battery_capacity
-    vout = status.output_voltage_mv
+except KeyboardInterrupt:
+    pass
 
-    print("Vin={vin}, BATCAP={batcap}, VOUT={vout}")
-
-if uart is not None:
-    uart.close()
+finally:
+    sta.close()

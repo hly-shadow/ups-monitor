@@ -12,8 +12,9 @@ from gpiozero import DigitalInputDevice
 
 from config import(
     SHUTDOWN_PIN,
-    STA_MIN_PULSE_SECONDS,
-    STA_MAX_PULSE_SECONDS
+    STA_PULL_UP,
+    STA_ACTIVE_STATE,
+    STA_CONFIRM_SECONDS
 )
 from logger import logger
 from system import safe_shutdown
@@ -46,228 +47,163 @@ class MonitorState(Enum):
 class UPSMonitor():
     """
     
-    Monitor UPS STA/Halt signal on GPIO SHUTDWON_PIN(BCM).
+    Monitor the UPSPack V3P STA signal.
 
-    Vendor behavior:
-        Normal:
-            GPIO SHUTDWON_PIN(BCM) -> LOW
-        Halt:
-            GPIO SHUTDWON_PIN(BCM) -> High for approximately 2~3 seconds
-        Then:
-            GPIO SHUTDWON_PIN(BCM) -> LOW
+    V3P STA protocol:
+        LOW -> normal
+        HIGH -> System Halt request
+
+    Once a valid Halt signal is detected, safe_shutdown() is
+    executed only once.   
     """
-    def __init__(self, pin: int):
+    def __init__(self):
 
-        self.pin = pin
-
-        # =====================================================
-        # State
-        # =====================================================
-        self.state = MonitorState.NORMAL
-
-        # Protect state and timer from concurrent access.
-        #
-        # GPIO callbacks and threading.Timer callbacks can
-        # execute in different threads.
-        self.state_lock = threading.Lock()
-
-        self.power_loss_start_time: Optional[float] = None
+        self._shutdown_triggered = False
+        self._lock = threading.Lock()
+        self._confirm_timer = None
 
         # =====================================================
         # GPIO confirmation
         # =====================================================
 
-        # GPIO input
-        # Internal pull-down
-        # LOW = NORMAL
-        # HIGH = power-loss signal
         self.device = DigitalInputDevice(
-            pin=self.pin,
-            pull_up=False
+            pin=SHUTDOWN_PIN,
+            pull_up=STA_PULL_UP,
+            # active_state=STA_ACTIVE_STATE,
+            bounce_time=0.05
         )
 
         # =====================================================
         # GPIO callbacks
         # =====================================================
 
-        self.device.when_activated = self._on_rising_edge
-        self.device.when_deactivated = self._on_falling_edge
+        self.device.when_activated = self._on_sta_activated
+        self.device.when_deactivated = self._on_sta_deactivated
 
         logger.info(
-            "UPS monitor initialized:"
-            "GPIO%d, internal pull-down enabled.",
-            self.pin
+            "UPS STA monitor started:"
+            "GPIO%d, normal=LOW, halt=HIGH.",
+            SHUTDOWN_PIN
         )
 
-        # =====================================================
-        # Check startup state
-        # =====================================================
+        logger.info(
+            "Initial STA state: %s",
+            "HIGH" if self.device.is_active else "LOW"
+        )
 
-        self._check_initial_state()
+        # Important:
+        # If the program starts while STA is already HIGH,
+        # when_activated may not be called because there is
+        # no LOW -> HIGH transition.
+        if self.device.is_active:
+            logger.warning(
+                "STA is already HIGH startup; "
+                "starting Halt confirmation."
+            )
+            self._start_confirmation()
 
     # ============================================================
     # Startup
     # ============================================================
 
-    def _check_initial_state(self) -> None:
+    def _start_confirmation(self) -> None:
         """
-        
-        Check GPIO state when the monitor starts.
+        Start a short confirmation timer.
 
-        Important:
-            STA is normal LOW.
-
-        If GPIO is HIGH at startup, we do NOT immediately
-        shutdown because we don't know whether this is a 
-        complete STA pulse or simply a startup condition.
+        STA must remain HIGH for STA_CONFIRM_SECONDS.
         """
 
+        with self._lock:
+            if self._shutdown_triggered:
+                logger.info(
+                    "Shutdown already triggered; "
+                    "ignoring STA signal."
+                )
+                return
+            
+            if self._confirm_timer is not None:
+                logger.info("STA confirmation already in progress.")
+                return
+
+            logger.warning(
+                "STA HIGH detected; "
+                "waiting %.3f seconds for confirmation.",
+                STA_CONFIRM_SECONDS
+            )
+
+            self._confirm_timer = threading.Timer(
+                STA_CONFIRM_SECONDS,
+                self._confirm_sta
+            )
+
+            self._confirm_timer.daemon = True
+            self._confirm_timer.start()
+
+    def _cancel_confirmation(self) -> None:
+        """
+        Cancel confirmation if STA returns LOW
+        before confirmation completes.
+        """
+
+        with self._lock:
+            if self._confirm_timer is not None:
+                logger.info(
+                    "STA returned LOW before confirmation; "
+                    "shutdown cancelled."
+                )
+
+                self._confirm_timer.cancel()
+                self._confirm_timer = None
+    def _confirm_sta(self) -> None:
+        """
+        Verify that STA is still HIGH after the 
+        confirmation period.
+        """
+
+        with self._lock:
+            self._confirm_timer = None
+
+            if self._shutdown_triggered:
+                return
+
+            if not self.device.is_active:
+                logger.info(
+                    "STA confirmation failed: "
+                    "signal is LOW."
+                )
+                return
+
+            logger.critical("UPS STA Halt signal confirmed.")
+
+            # This prevents duplicate shutdown requests.
+            self._shutdown_triggered = True
         try:
-            if self.device.is_active:
-                logger.warning(
-                    "GPIO%d is HIGH at startup.",
-                    self.pin
-                )
+            res = safe_shutdown()
 
+            if res:
+                logger.info("Safe shutdown command executed successfully.")
             else:
-                logger.info(
-                    "GPIO%d is LOW at startup; STA inactive.",
-                    self.pin
-                )
+                logger.critical("Safe shutdown failed.")
         except Exception:
-            logger.exception("Failed to determine GPIO state at startup.")
+            logger.exception("Exception while executing shutdown!")
 
-    def _on_rising_edge(self) -> None:       
+    def _on_sta_activated(self) -> None:       
         """
-        LOW -> HIGH
-
-        Start measuring STA pulse duration.
+        Called when STA changes from LOW -> HIGH
         """
 
-        with self.state_lock:
+        logger.warning("STA signal changed: LOW -> HIGH")
 
-            logger.warning(
-                "GPIO%d rising edge detected:",
-                "LOW -> HIGH",
-                self.pin
-            )
+        self._start_confirmation()
 
-            # Already shutting down.
-            if self.state == MonitorState.SHUTDOWN_REQUESTED:
-                logger.warning(
-                    "Rising edge ignored:"
-                    "shutdown already requested."
-                )
-                return
-
-            # Shutdown already failed.
-            if self.state == MonitorState.SHUTDOWN_FAILED:
-                logger.warning(
-                    "Rising edge ignored:"
-                    "previous shutdown attempt failed."
-                )
-                return
-
-            # Already confirming
-            if self.state == MonitorState.CONFIRMING:
-                logger.debug(
-                    "Rising edge ignored:"
-                    "confirmation already in progress."
-                )
-                return
-
-            # Normal --> Confirming
-            self.state = MonitorState.CONFIRMING
-
-            self.power_loss_start_time = time.monotonic()
-
-            logger.warning(
-                "STA/Halt pulse started,"
-                "waiting for falling edge."
-            )
-
-    def _on_falling_edge(self) -> None:
+    def _on_sta_deactivated(self) -> None:
         """
-        HIGH -> LOW
-        
-        Calculate STA pulse duration.
+        Called when STA changes from HIGH -> LOW
         """
 
-        with self.state_lock:
+        logger.info("STA signal changed: HIGH -> LOW")        
 
-            logger.info(
-                "GPIO%d falling edge detected:",
-                "HIGH -> LOW",
-                self.pin
-            )
-
-            if self.state != MonitorState.CONFIRMING:
-                logger.info(
-                    "Falling edge ignored:"
-                    "current state is %s",
-                    self.state.name
-                )
-                return
-
-            if self.power_loss_start_time is None:
-                logger.warning(
-                    "Falling edge detected without "
-                    "a valid rising-edge timestamp."
-                )
-
-                self.state = MonitorState.NORMAL
-                return
-
-            duration = (time.monotonic() - self.power_loss_start_time)
-            self.power_loss_start_time = None
-
-            logger.info(
-                "STA/Halt signal duration: %.3f seconds.",
-                duration
-            )
-
-            # Too short
-            if duration < STA_MIN_PULSE_SECONDS:
-
-                self.state = MonitorState.NORMAL
-
-                logger.warning(
-                    "STA pulse too short: %.3f < %.3f seconds",
-                    duration,
-                    STA_MIN_PULSE_SECONDS
-                )
-                return
-
-            # Too long
-            if duration > STA_MAX_PULSE_SECONDS:
-
-                self.state = MonitorState.NORMAL
-
-                logger.warning(
-                    "STA pulse too long: %.3f > %.3f seconds",
-                    duration,
-                    STA_MAX_PULSE_SECONDS
-                )
-                return
-
-            # Confirmed
-            self.state = MonitorState.SHUTDOWN_REQUESTED
-
-            logger.info(
-                "Valid STA/Halt signal confirmed: %.3f seconds.",
-                duration
-            )
-            logger.critical("Shutdown requested.")
-
-        # -------------------------------------------------
-        # IMPORTANT:
-        #
-        # Do NOT execute safe_shutdown() while holding 
-        # state_lock
-        #
-        # safe_shutdown() can take several seconds.
-        # -------------------------------------------------
-        self._execute_shutdown()
+        self._cancel_confirmation()
     
     def _execute_shutdown(self) -> None:
         """Execute the safe shutdown sequence."""
@@ -301,12 +237,21 @@ class UPSMonitor():
                 "Monitor entering terminal state."
             )
 
+        
+
     def close(self) -> None:
         """Close the UPS monitor and release GPIO resources."""
 
-        logger.info("Close the UPS monitor.")
+        logger.info("Closing the UPS monitor.")
+
+        with self._lock:
+            if self._confirm_timer is not None:
+                self._confirm_timer.cancel()
+                self._confirm_timer = None
 
         try:
+            self.device.when_activated = None
+            self.device.when_deactivated = None
             self.device.close()
         except Exception:
             logger.exception("Failed to close GPIO device.")

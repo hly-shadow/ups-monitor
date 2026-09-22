@@ -7,10 +7,8 @@ import time
 from logger import logger
 from monitor import UPSMonitor
 from ups_uart import UPSUART
-from config import(
-    SHUTDOWN_PIN,
-    VOLTAGE_CHANGE_THRESHOLD_MV
-)
+from config import VOLTAGE_CHANGE_THRESHOLD_MV
+
 
 def main() -> None:
     """Start and run the UPS monitor."""
@@ -23,7 +21,7 @@ def main() -> None:
 
     try:
 
-        monitor = UPSMonitor(pin=SHUTDOWN_PIN)
+        monitor = UPSMonitor()
         uart = UPSUART()
 
         logger.info("UPS monitor started.")
@@ -39,7 +37,6 @@ def main() -> None:
                         status.battery_capacity,
                         status.output_voltage_mv
                     )
-                    last_status = status
 
                 else:
                     if status.input_power != last_status.input_power:
@@ -56,23 +53,17 @@ def main() -> None:
                         )
 
                     voltage_delta = abs(status.output_voltage_mv - last_status.output_voltage_mv)
-                    voltage_changed = voltage_delta >= VOLTAGE_CHANGE_THRESHOLD_MV
 
-                    if voltage_changed:
+                    if voltage_delta >= VOLTAGE_CHANGE_THRESHOLD_MV:
                         logger.info(
                             "UPS output voltage changed: %dmV -> %dmV",
                             last_status.output_voltage_mv,
                             status.output_voltage_mv
                         )
 
-                    if (
-                        status.input_power != last_status.input_power
-                        or status.battery_capacity != last_status.battery_capacity
-                        or voltage_changed
-                    ):
-                        last_status = status
-                    
 
+                last_status = status
+                    
             
             time.sleep(0.1)
 
