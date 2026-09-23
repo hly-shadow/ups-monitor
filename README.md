@@ -27,24 +27,24 @@
 
 ## 状态机
 ```text
-             UPS                UART
-              │                  │
-       ┌──────┴──────┐           ├── Vin GOOD / NG       ← 判断外部电源
-       │             │           ├── BATCAP 100          ← 电池容量
-      UART          STA          └── Vout 5250           ← 输出电压
-       │             │
-       ▼             ▼          GPIO17 / STA
- Vin GOOD/NG       GPIO17        │
-       │             │           └── Halt signal         ← UPS要求Pi关机
-       └──────┬──────┘
-              ▼
-        UPSMonitor
-              │
-              ▼
-       安全关机状态机
-              │
-              ▼
-       sync + shutdown   
+                 UPS                     UART
+                  │                       │
+        ┌─────────┴─────────┐             ├──Vin GOOD/NG  ← 判断外部电源
+        │                   │             ├──BATCAP 100   ← 电池容量                   
+       UART                 STA           └──Vout 5250    ← 输出电压 
+        │                   │
+ Vin/BATCAP/Vout        厂商 Halt
+        │                   │
+        ▼                   ▼
+  软件提前预警/保护       最终硬件保护
+        │                   │
+        └────────┬──────────┘
+                 ▼
+         ShutdownController
+                 │
+                 ▼
+          safe_shutdown() 
+
 
 ```
 ## 项目结构
@@ -53,6 +53,8 @@
 ups_monitor/
 ├── main.py
 ├── config.py
+├── power_monitor.py
+├── shutdown_controller.py
 ├── logger.py
 ├── system.py
 ├── monitor.py

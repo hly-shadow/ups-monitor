@@ -96,4 +96,38 @@ UART_TIMEOUT = 1.0
 UART_BUFFER_MAX_SIZE = 4096
 UART_FRAME_MAX_SIZE = 256
 
+
+# ============================================================
+# UPS Voltage Protection
+# ============================================================
+
+# Undervoltage warning
+VOUT_WARNING_THRESHOLD_MV = 5100
+
+VOUT_SHUTDOWN_THRESHOLD_MV = 5000
+
+VOUT_SHUTDOWN_CONFIRM_SECONDS = 5.0
+
+VOUT_RECOVERY_THRESHOLD_MV = 5150
+
 VOLTAGE_CHANGE_THRESHOLD_MV = 10
+
+LOG_UART_STATUS = False
+
+# ============================================================
+# Simulation / Test
+# ============================================================
+
+SIMULATE_VOUT = False
+
+# Each element:
+# (Duration in seconds, Simulated Vout in mV)
+
+## Example:
+# 3 seconds 5000mV
+# 3 seconds 5250mV
+SIMULATED_VOUT_MV_SEQUENCE = [
+    (2.0, 5000),
+    (3.0, 5250),
+    (6.0, 5000)
+]

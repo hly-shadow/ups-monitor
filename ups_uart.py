@@ -74,17 +74,13 @@ class UPSUART:
 
         match = self.FRAME_PATTERN.fullmatch(frame.strip())
 
-        if not match:
-            logger.warning(
-                "Invalid  UPS UART frame: %r",
-                frame
-            )
-
+        if match is None:
+            print(f"Invalid  UPS UART frame: {frame}")
             return None
 
         vin = match.group(1).upper()
-        battery_capacity = float(match.group(2))
-        output_voltage = float(match.group(3))
+        battery_capacity = int(match.group(2))
+        output_voltage = int(match.group(3))
 
         if not 0<= battery_capacity <=100:
             return None
@@ -115,7 +111,7 @@ class UPSUART:
                 UART_BUFFER_MAX_SIZE
             )
             # Keep only the newest data.
-            self.buffer = self.buffer[-(UART_BUFFER_MAX_SIZE-1):]
+            self.buffer = self.buffer[-(UART_BUFFER_MAX_SIZE - 1):]
 
     def _extract_frame(self) -> Optional[str]:
         """
@@ -169,6 +165,9 @@ class UPSUART:
         """
         Read and parse one valid UPS status frame.
 
+        All currently available complete frames are processed.
+        The newest valid status is returned.
+
         Invalid frames are discarded.
         Incomplete frames remain in the buffer.
         """
@@ -177,7 +176,7 @@ class UPSUART:
             data = self.serial.read(
                 self.serial.in_waiting or 1
             )
-
+            logger.debug("UART frame: %r", data)
             self._append_data(data)
 
             while True:
@@ -191,9 +190,7 @@ class UPSUART:
 
                 if status is not None:
                     return status
-
-                # Invalid frame:
-                # continue looking for the next frame.
+        
         except serial.SerialException:
             logger.exception(
                 "UPS UART communication error."

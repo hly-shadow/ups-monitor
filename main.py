@@ -7,7 +7,8 @@ import time
 from logger import logger
 from monitor import UPSMonitor
 from ups_uart import UPSUART
-from config import VOLTAGE_CHANGE_THRESHOLD_MV
+from power_monitor import PowerMonitor
+from shutdown_controller import ShutdownController
 
 
 def main() -> None:
@@ -16,54 +17,23 @@ def main() -> None:
 
     monitor = None
     uart = None
-
-    last_status = None
+    power_monitor = None
 
     try:
 
-        monitor = UPSMonitor()
+        shutdown_controller = ShutdownController()
+
+        monitor = UPSMonitor(shutdown_controller)
         uart = UPSUART()
+        power_monitor = PowerMonitor(shutdown_controller)
 
         logger.info("UPS monitor started.")
 
-        while True:
+        while not shutdown_controller.shutdown_started:
             status = uart.read_status()
 
             if status is not None:
-                if last_status is None:
-                    logger.info(
-                        "UPS status: Vin=%s, BATCAP=%d%%, Vout=%dmV",
-                        "GOOD" if status.input_power else "NG",
-                        status.battery_capacity,
-                        status.output_voltage_mv
-                    )
-
-                else:
-                    if status.input_power != last_status.input_power:
-                        logger.warning(
-                            "UPS input power changed: %s -> %s",
-                            "GOOD" if last_status.input_power else "NG",
-                            "GOOD" if status.input_power else "NG",
-                        )
-                    if status.battery_capacity != last_status.battery_capacity:
-                        logger.info(
-                            "UPS battery capacity changed: %d%% -> %d%%",
-                            last_status.battery_capacity,
-                            status.battery_capacity
-                        )
-
-                    voltage_delta = abs(status.output_voltage_mv - last_status.output_voltage_mv)
-
-                    if voltage_delta >= VOLTAGE_CHANGE_THRESHOLD_MV:
-                        logger.info(
-                            "UPS output voltage changed: %dmV -> %dmV",
-                            last_status.output_voltage_mv,
-                            status.output_voltage_mv
-                        )
-
-
-                last_status = status
-                    
+                power_monitor.update(status)
             
             time.sleep(0.1)
 

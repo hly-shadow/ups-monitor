@@ -1,21 +1,18 @@
-from gpiozero import DigitalInputDevice
-from time import sleep
+import time
+from monitor import UPSMonitor
+from ups_uart import UPSUART
+from power_monitor import PowerMonitor
+from shutdown_controller import ShutdownController
 
-sta = DigitalInputDevice(
-    pin=17,
-    pull_up=False,
-)
+shutdown_controller = ShutdownController()
+monitor = UPSMonitor(shutdown_controller)
+uart = UPSUART()
+power_monitor = PowerMonitor(shutdown_controller)
 
-try:
-    while True:
-        print(
-            f"GPIO17 value={sta.value}, "
-            f"active={sta.is_active}"
-        )
-        sleep(5)
+while not shutdown_controller.shutdown_started:
+    status = uart.read_status()
 
-except KeyboardInterrupt:
-    pass
+    if status is not None:
+        power_monitor.update(status)
 
-finally:
-    sta.close()
+    time.sleep(0.1)
