@@ -81,7 +81,7 @@ class PowerMonitor:
         if self.last_status is not None:
 
             delta = abs(voltage - self.last_status.output_voltage_mv)
-            print(f"delta={delta}")
+
             if delta >= VOLTAGE_CHANGE_THRESHOLD_MV:
                 logger.info(
                     "UPS output voltage changed: %dmV -> %dmV",
