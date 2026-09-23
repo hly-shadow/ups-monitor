@@ -58,10 +58,6 @@ class PowerMonitor:
 
         self._log_status(status)
 
-        self._check_input_power(status)
-
-        self._check_battery_capacity(status)
-
         self._check_output_voltage(status, now)
 
         self.last_status = status
@@ -78,30 +74,6 @@ class PowerMonitor:
             status.output_voltage_mv
         )
 
-    def _check_input_power(self, status: UPSStatus) -> None:
-
-        if self.last_status is None:
-            return
-
-        if status.input_power != self.last_status.input_power:
-            logger.info(
-                "UPS input power changed: %s -> %s",
-                ("GOOD" if self.last_status.input_power else "NG"),
-                ("GOOD" if status.input_power else "NG")
-            )
-
-    def _check_battery_capacity(self, status: UPSStatus) -> None:
-
-        if self.last_status is None:
-            return
-
-        if status.battery_capacity != self.last_status.battery_capacity:
-            logger.info(
-                "UPS battery capacity changed: %d%% -> %d%%",
-                self.last_status.battery_capacity,
-                status.battery_capacity
-            )
-
     def _check_output_voltage(self, status: UPSStatus, now: float) -> None:
 
         voltage = status.output_voltage_mv
@@ -109,7 +81,7 @@ class PowerMonitor:
         if self.last_status is not None:
 
             delta = abs(voltage - self.last_status.output_voltage_mv)
-
+            print(f"delta={delta}")
             if delta >= VOLTAGE_CHANGE_THRESHOLD_MV:
                 logger.info(
                     "UPS output voltage changed: %dmV -> %dmV",

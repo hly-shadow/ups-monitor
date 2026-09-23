@@ -86,8 +86,8 @@ class ShutdownController:
         logger.info("Executing safe shutdown: %s", reason)
 
         try:
-            # res = safe_shutdown()
-            res = True
+            res = safe_shutdown()
+
         except Exception:
             logger.exception("Exception during safe shutdown.")
             res = False
